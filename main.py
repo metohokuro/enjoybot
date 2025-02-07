@@ -398,33 +398,39 @@ async def send_dm_error(interaction: discord.Interaction, error: discord.app_com
 def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.administrator
 
-# スラッシュコマンドの設定
-@bot.tree.command(name="news", description="サーバー内の全員にDMを送信します（管理者のみ実行可能）")
-@app_commands.describe(message="送信するメッセージ")
-@app_commands.check(is_admin)  # 管理者のみ実行可能
-async def news(interaction: discord.Interaction, message: str):
-    # コマンドを実行したサーバーを取得
-    guild = interaction.guild
+@bot.tree.command(name="news", description="サーバーの全メンバーにニュースをDMで送信します（管理者限定）")
+@app_commands.describe(title="ニュースのタイトル", description="ニュースの説明")
+async def news(interaction: discord.Interaction, title: str, description: str):
+    # 管理者権限チェック
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ あなたはこのコマンドを実行する権限がありません。", ephemeral=True)
+        return
 
-    # サーバー内の全メンバーを取得
-    members = guild.members
+    guild = interaction.guild  # コマンドが実行されたサーバー
+    if not guild:
+        await interaction.response.send_message("サーバー内でのみ使用可能です。", ephemeral=True)
+        return
 
-    # 全メンバーにDMを送信
-    for member in members:
-        if not member.bot:  # Botには送信しない
+    embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
+    embed.set_footer(text=f"送信元: {guild.name}")
+
+    # 事前に「考えています...」と送信
+    response_message = await interaction.response.send_message("⌛ 考えています...", ephemeral=True)
+
+    sent_count = 0
+    failed_count = 0
+
+    for member in guild.members:
+        if not member.bot and member.dm_channel is None:
             try:
-                await member.send(f"お知らせ: {message}")
+                await member.create_dm()
+                await member.dm_channel.send(embed=embed)
+                sent_count += 1
             except discord.Forbidden:
-                print(f"{member.name} にDMを送信できませんでした。")
+                failed_count += 1  # DMが送れないメンバーをカウント
 
-    # コマンド実行者に完了メッセージを送信
-    await interaction.response.send_message("全員にDMを送信しました。", ephemeral=True)
-
-# エラーハンドリング（管理者でない場合）
-@news.error
-async def news_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
+    # 送信完了後、メッセージを編集して結果を表示
+    await response_message.edit(content=f"✅ 送信完了: {sent_count}人\n❌ 送信失敗: {failed_count}人")
 
 
 # Botの起動
