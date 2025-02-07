@@ -398,15 +398,23 @@ async def send_dm_error(interaction: discord.Interaction, error: discord.app_com
 def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.administrator
 
+async def send_dm(member: discord.Member, embed: discord.Embed, queue: asyncio.Queue):
+    """ メンバーにDMを送信し、結果をqueueに追加する（並列処理用） """
+    if not member.bot:
+        try:
+            await member.send(embed=embed)
+            await queue.put(("success", member))
+        except discord.Forbidden:
+            await queue.put(("fail", member))
+
 @bot.tree.command(name="news", description="サーバーの全メンバーにニュースをDMで送信します（管理者限定）")
 @app_commands.describe(title="ニュースのタイトル", description="ニュースの説明")
 async def news(interaction: discord.Interaction, title: str, description: str):
-    # 管理者権限チェック
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ あなたはこのコマンドを実行する権限がありません。", ephemeral=True)
         return
 
-    guild = interaction.guild  # コマンドが実行されたサーバー
+    guild = interaction.guild
     if not guild:
         await interaction.response.send_message("サーバー内でのみ使用可能です。", ephemeral=True)
         return
@@ -414,23 +422,45 @@ async def news(interaction: discord.Interaction, title: str, description: str):
     embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
     embed.set_footer(text=f"送信元: {guild.name}")
 
-    # 事前に「考えています...」と送信
-    response_message = await interaction.response.send_message("⌛ 考えています...", ephemeral=True)
+    response_message = await interaction.response.send_message("⌛ ニュースの送信を開始しています...\n✅ 送信成功: 0人\n❌ 送信失敗: 0人", ephemeral=False)
 
+    queue = asyncio.Queue()
+    tasks = []
+
+    for member in guild.members:
+        tasks.append(send_dm(member, embed, queue))
+
+    # 並列処理で全員にDMを送る（同時に50人程度を処理）
+    CHUNK_SIZE = 50  # 一度に並列処理する数
     sent_count = 0
     failed_count = 0
 
-    for member in guild.members:
-        if not member.bot and member.dm_channel is None:
+    # 進捗表示用のタスク
+    async def update_progress():
+        nonlocal sent_count, failed_count
+        while True:
             try:
-                await member.create_dm()
-                await member.dm_channel.send(embed=embed)
-                sent_count += 1
-            except discord.Forbidden:
-                failed_count += 1  # DMが送れないメンバーをカウント
+                result, _ = await queue.get()
+                if result == "success":
+                    sent_count += 1
+                else:
+                    failed_count += 1
+                if sent_count + failed_count == len(tasks):
+                    break
+                #await response_message.edit(content=f"⌛ ニュースの送信中...\n✅ 送信成功: {sent_count}人\n❌ 送信失敗: {failed_count}人")
+            except:
+                break
 
-    # 送信完了後、メッセージを編集して結果を表示
-    await response_message.edit(content=f"✅ 送信完了: {sent_count}人\n❌ 送信失敗: {failed_count}人")
+    progress_task = asyncio.create_task(update_progress())
+
+    # 50人ずつ並列処理
+    for i in range(0, len(tasks), CHUNK_SIZE):
+        await asyncio.gather(*tasks[i:i + CHUNK_SIZE])
+
+    await progress_task  # 進捗更新タスクを終了
+
+    # 最終結果を表示
+    await response_message.edit(content=f"✅ **ニュースの送信が完了しました！**\n✅ 送信成功: {sent_count}人\n❌ 送信失敗: {failed_count}人")
 
 
 # Botの起動
