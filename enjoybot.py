@@ -606,6 +606,31 @@ async def 実績数反映(interaction: discord.Interaction, prefix: str = '', ad
     # 変更結果をEmbed形式で送信
     await interaction.followup.send(embed=embed, view=view)  # followupで追加レスポンスを送る
 
+@bot.tree.command(name="help", description="Botの機能一覧を表示")
+@app_commands.describe(private="True: 自分だけ / False: みんなに見える")
+async def help_command(interaction: discord.Interaction, private: bool = True):
+    embed = discord.Embed(
+        title="📜 Botの機能一覧",
+        description="以下のコマンドが使用できます。",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="🎟️ /ticket", value="チケットを作成するボタンを作る", inline=False)
+    embed.add_field(name="🗣️ /say", value="Webhookを使って他人になりすませる", inline=False)
+    embed.add_field(name="📢 /announce", value="**[管理者専用]** Botを導入しているサーバーのオーナーのDMにお知らせを飛ばす", inline=False)
+    embed.add_field(name="📜 /server", value="**[管理者専用]** Botを導入しているサーバーの情報を管理者のDMに送る", inline=False)
+    embed.add_field(name="🔢 /message_count", value="メッセージ数を数える", inline=False)
+    embed.add_field(name="🎁 /giveaway", value="抽選を行い、当選者にDMを送る", inline=False)
+    embed.add_field(name="🛠️ /develop", value="**[管理者専用]** giveawayの履歴を管理者のDMに送信", inline=False)
+    embed.add_field(name="📦 /senddm", value="指定したユーザーのDMに商品を配達する", inline=False)
+    embed.add_field(name="🛡️ /addrole", value="指定したロールを付与するembedを設置する", inline=False)
+    embed.add_field(name="📊 /実績数反映", value="実行したチャンネルのメッセージ数を読み取って名前を変更する", inline=False)
+    embed.set_footer(text="※このメッセージは自分にしか見えません")
+
+    visibility_text = "（このメッセージは自分にしか見えません）" if private else ""
+    embed.set_footer(text=f"※ /help private: False で全員に表示できます {visibility_text}")
+
+    await interaction.response.send_message(embed=embed, ephemeral=private)
+
 
 # Botの起動
 @bot.event
