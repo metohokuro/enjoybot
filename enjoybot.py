@@ -472,80 +472,35 @@ async def send_dm_error(interaction: discord.Interaction, error: discord.app_com
 #    # 最終結果を表示
 #    await response_message.edit(content=f"✅ **ニュースの送信が完了しました！**\n✅ 送信成功: {sent_count}人\n❌ 送信失敗: {failed_count}人")
 
-@bot.tree.command(name="addrole", description="リアクションでロールを付与するメッセージを作成")
+class RoleButton(discord.ui.View):
+    def __init__(self, role: discord.Role):
+        super().__init__(timeout=None)
+        self.role = role
+
+    @discord.ui.button(label="ロールを付与", style=discord.ButtonStyle.green)
+    async def give_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.role in interaction.user.roles:
+            await interaction.response.send_message("すでにこのロールを持っています。", ephemeral=True)
+        else:
+            try:
+                await interaction.user.add_roles(self.role)
+                await interaction.response.send_message(f"{self.role.name} を付与しました！", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("エラー: Botにロールを付与する権限がありません。管理者に問い合わせてください。", ephemeral=True)
+
+
+@bot.tree.command(name="addrole", description="指定したロールの付与ボタンを作成します（管理者のみ実行可能）")
+@app_commands.describe(role="付与するロールを指定してください")
 @app_commands.checks.has_permissions(administrator=True)
-async def addrole(interaction: discord.Interaction, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None,
-                  role4: discord.Role = None, role5: discord.Role = None, role6: discord.Role = None,
-                  role7: discord.Role = None, role8: discord.Role = None, role9: discord.Role = None,
-                  role10: discord.Role = None):
-
-    await interaction.response.defer()
-
-    roles = [role for role in [role1, role2, role3, role4, role5, role6, role7, role8, role9, role10] if role]
-
-    if not roles:
-        await interaction.followup.send("少なくとも1つのロールを指定してください！", ephemeral=True)
-        return
-
-    embed = discord.Embed(title="リアクションでロールを取得！", description="対応するリアクションを押してロールを取得してください。", color=discord.Color.blue())
-    role_map = {}
-
-    for i, role in enumerate(roles):
-        embed.add_field(name=f"{number_emojis[i]} {role.name}", value=f"ID: {role.id}", inline=False)
-        role_map[number_emojis[i]] = role.id
-
-    message = await interaction.channel.send(embed=embed)
-
-    for emoji in role_map.keys():
-        await message.add_reaction(emoji)
-
-    role_message_map[message.id] = role_map
-
-    await interaction.followup.send("リアクションロールの設定が完了しました！", ephemeral=True)
+async def addrole(interaction: discord.Interaction, role: discord.Role):
+    embed = discord.Embed(title="ロール付与", description=f"以下のボタンを押すと `{role.name}` ロールが付与されます。", color=discord.Color.blue())
+    view = RoleButton(role)
+    await interaction.response.send_message(embed=embed, view=view)
 
 @addrole.error
 async def addrole_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.errors.MissingPermissions):
-        await interaction.response.send_message("❌ このコマンドを実行できるのは **管理者のみ** です！", ephemeral=True)
-
-async def handle_role_action(payload, add: bool):
-    """ロールの付与/削除を共通で処理"""
-    if payload.message_id in role_message_map:
-        guild = bot.get_guild(payload.guild_id)
-        channel = guild.get_channel(payload.channel_id)  # ここで先にチャンネルを取得
-        member = guild.get_member(payload.user_id)
-        if not member or member.bot:
-            return  
-
-        role_id = role_message_map[payload.message_id].get(str(payload.emoji))
-        if role_id:
-            role = guild.get_role(role_id)
-            if role:
-                try:
-                    if add:
-                        await member.add_roles(role)
-                        emoji = "☑"
-                    else:
-                        await member.remove_roles(role)
-                        emoji = "🗑️"
-
-                    message = await channel.fetch_message(payload.message_id)
-                    await message.add_reaction(emoji)
-                    await asyncio.sleep(3)
-                    await message.remove_reaction(emoji, bot.user)
-                except discord.Forbidden:
-                    # 権限不足ならリアクション削除してエラーメッセージ
-                    message = await channel.fetch_message(payload.message_id)
-                    await message.remove_reaction(payload.emoji, member)
-                    await channel.send(f"❌ <@{member.id}> にロール `{role.name}` を変更できません！（BOTに権限がありません）", delete_after=5)
-
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    await handle_role_action(payload, add=True)
-
-@bot.event
-async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    await handle_role_action(payload, add=False)
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドは管理者のみ実行可能です。", ephemeral=True)
 
 
 # 管理者チェックのための非同期関数
@@ -630,6 +585,36 @@ async def help_command(interaction: discord.Interaction, private: bool = True):
     embed.set_footer(text=f"※ /help private: False で全員に表示できます {visibility_text}")
 
     await interaction.response.send_message(embed=embed, ephemeral=private)
+
+@bot.tree.command(name="save", description="このチャンネルのメッセージを保存して送信します")
+@app_commands.describe(public="チャンネルにも送るかどうか（true: 送る, false: 送らない）")
+async def save(interaction: discord.Interaction, public: bool):
+    await interaction.response.defer(thinking=True)  # 応答遅延でタイムアウト回避
+    
+    channel = interaction.channel
+    messages = []
+    
+    async for message in channel.history(limit=100):  # 最新100件のメッセージを取得
+        messages.append(f"[{message.author.display_name}] {message.content}")
+    
+    log_content = "\n".join(reversed(messages))
+    filename = f"{channel.name}_log.txt"
+    
+    with open(filename, "w", encoding="utf-8") as file:
+        file.write(log_content)
+    
+    # DM用のファイルを開く
+    with open(filename, "rb") as file:
+        discord_file = discord.File(file, filename=filename)
+        await interaction.user.send(file=discord_file, content=f"チャンネル {channel.mention} のログです。")
+    
+    if public:
+        # チャンネル用のファイルを開き直す
+        with open(filename, "rb") as file:
+            discord_file_public = discord.File(file, filename=filename)
+            await channel.send(file=discord_file_public, content=f"{interaction.user.mention} がこのチャンネルのログを保存しました。")
+    
+    await interaction.followup.send("メッセージの保存が完了しました。", ephemeral=True)
 
 
 # Botの起動
