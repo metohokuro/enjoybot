@@ -8,8 +8,12 @@ import random
 import datetime
 import asyncio
 import aiohttp
+import textwrap
+import traceback
+CHANNELS_FILE = 'channels.txt'
 
 number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
 
 role_message_map = {}
 
@@ -25,11 +29,17 @@ intents.guild_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-ADMIN_PASSWORD = "ぱすわーど"  # giveawayの履歴を送信するときに入力するパスワード
-SECRET_PASSWORD = 'ぱすわーど'# 「/announce」をするときに入力するパスワード
-WEBHOOK_URL = "ゆーあーるえる" # botが参加したときに送るwebhookのURL
-BOT_INVITE_LINK = "ゆーあーるえる"# botの宣伝をするときに送るbotのURL
-TOKEN = 'とーくん' # botのtoken
+#ここから入力
+
+SECRET_PASSWORD = 'ぱすわーど' #基本的なパスワード
+WEBHOOK_URL = "うぇぶふっく" #botが入ったときに送信するウェブフック
+BOT_INVITE_LINK = "しょうたいりんく" #botの招待リンク
+OWNER_ID = 123456789 # !commandを実行できる人のユーザーID(数字)
+ADMIN_PASSWORD = "ぱすわーど"  # giveawayの履歴を送信するパスワード
+LOG_CHANNEL_ID = 123456789  # sayのlogチャンネルのチャンネルID
+TOKEN = 'とーくん' #ここにbotのtokenを入力
+
+#ここまで入力
 
 class GiveawayButton(discord.ui.View):
     def __init__(self, end_time, prize, content, winners_count):
@@ -65,7 +75,7 @@ class GiveawayButton(discord.ui.View):
             winners = random.sample(self.participants, min(self.winners_count, len(self.participants)))
             winner_mentions = ', '.join(f"<@{winner_id}>" for winner_id in winners)
             await self.message.channel.send(f"🎉 おめでとうございます！ {winner_mentions} さんが「{self.prize}」の勝者です！ 🎉")
-            
+            print('いいよ')
             # 当選者にDMを送信
             for winner_id in winners:
                 winner = await bot.fetch_user(winner_id)
@@ -187,17 +197,59 @@ async def ticket(
     view = TicketView(role=role, category=category, log_channel=log_channel)
     await interaction.response.send_message(embed=embed, view=view)
 
-@bot.tree.command(name="say", description="他人になりすませれます")
+@bot.tree.command(name="say", description="指定されたユーザー風のメッセージを送信します")
+@app_commands.describe(user="メッセージを送信する際のユーザー", message="送信するメッセージ内容")
 async def say(interaction: discord.Interaction, user: discord.Member, message: str):
     """
-    指定したチャンネルにウェブフックを作成して、そのウェブフックを使い
-    指定されたユーザー風の名前とアイコンでメッセージを送信する
+    指定されたチャンネルにWebhookを作成して送信するが、
+    メッセージにロールメンション（@everyone, @here含む）が含まれていた場合は送信を中止し、
+    みんなに「○○が△△のロールを使おうとしました！」と通知する。
     """
     try:
+        # 実行者の情報
+        executor = interaction.user
+        guild = interaction.guild  # ギルド情報を取得
+
+        # ログ用チャンネルを取得
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+
+        # 🛑 @everyone や @here の検出
+        if "@everyone" in message or "@here" in message or '@認証済み' in message or '@認証まだ' in message or '@member' in message:
+            warning_message = f"⚠️ {executor.mention} が everyone または here を使おうとしました！"
+            log_message = f"🛑 `/say` コマンドで everyone または here のメンションが検出されました。\n\n"
+            log_message += f"👤 実行者: {executor.mention} ({executor.name} / ID: {executor.id})"
+
+            # ログ用チャンネルに警告を送信
+            if log_channel:
+                await log_channel.send(log_message)
+
+            # 実行者にエラーメッセージを送信
+            await interaction.response.send_message("⚠️ everyone または here を含むメッセージは送信できません！", ephemeral=True)
+            return
+
+        # 🛑 通常のロールメンションの検出
+        mentioned_roles = [role for role in guild.roles if f"<@&{role.id}>" in message]
+        if mentioned_roles:
+            role_names = ", ".join([role.mention for role in mentioned_roles])  # メンション形式
+            role_plain_names = ", ".join([role.name for role in mentioned_roles])  # 文字列形式
+
+            warning_message = f"⚠️ {executor.mention} が {role_names} を使おうとしました！"
+            log_message = f"🛑 `/say` コマンドでロールメンションが検出されました。\n\n"
+            log_message += f"👤 実行者: {executor.mention} ({executor.name} / ID: {executor.id})\n"
+            log_message += f"📝 試みたロール: {role_plain_names}"
+
+            # ログ用チャンネルに警告を送信
+            if log_channel:
+                await log_channel.send(log_message)
+
+            # 実行者にエラーメッセージを送信
+            await interaction.response.send_message("⚠️ ロールメンションを含むメッセージは送信できません！", ephemeral=True)
+            return
+
         # 実行されたチャンネル
         channel = interaction.channel
 
-        # チャンネルにWebhookを作成
+        # Webhookを作成
         webhook = await channel.create_webhook(name=f"{user.display_name}'s webhook")
 
         # ユーザーの名前とアバターURLを取得
@@ -214,14 +266,27 @@ async def say(interaction: discord.Interaction, user: discord.Member, message: s
         # Webhookを削除
         await webhook.delete()
 
-        # 完了メッセージを送信
-        await interaction.response.send_message("送信に成功", ephemeral=True)
+        # 実行者のみに通知
+        await interaction.response.send_message("メッセージを送信しました！", ephemeral=True)
+
+        # `/say` コマンドの実行ログを送信
+        if log_channel:
+            executor_info = (
+                f"👤 実行者: {executor.mention}\n"
+                f"📝 名前: {executor.display_name}\n"
+                f"🔗 ユーザー名: {executor.name}\n"
+                f"🆔 ID: {executor.id}"
+            )
+            await log_channel.send(f"🛠 `/say` コマンドが実行されました！\n\n{executor_info}")
 
     except Exception as e:
-        # エラーハンドリング
-        await interaction.response.send_message(f"エラーが発生しました: {str(e)}",ephemeral=True)
-        #await channel.send(f"エラーが発生しました: {str(e)}",ephemeral=True)
-
+        # エラー発生時に、まだ `interaction.response.send_message()` が実行されていなければ送信
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
+        else:
+            # すでにレスポンス済みの場合、ログチャンネルにエラー情報を送信
+            if log_channel:
+                await log_channel.send(f"⚠️ エラーが発生しました: {str(e)}")
 @bot.tree.command(name="announce", description="Botを導入しているサーバーのオーナーにお知らせを送信します")
 @app_commands.describe(
     password="管理者のみが知るパスワード",
@@ -342,6 +407,8 @@ async def giveaway(interaction: discord.Interaction, 景品: str, 制限時間: 
         f"🎉 「{景品}」の抽選を開始します！ボタンを押して参加してください。\n現在の参加人数: 0 🎉\n抽選終了時刻: {end_time.strftime('%H時%M分%S秒までです！')}",
         view=view
     )
+    print(景品)
+    print('だめだよ！')
     
     # タイマーを開始
     bot.loop.create_task(view.start_timer())
@@ -561,6 +628,7 @@ async def 実績数反映(interaction: discord.Interaction, prefix: str = '', ad
     # 変更結果をEmbed形式で送信
     await interaction.followup.send(embed=embed, view=view)  # followupで追加レスポンスを送る
 
+
 @bot.tree.command(name="help", description="Botの機能一覧を表示")
 @app_commands.describe(private="True: 自分だけ / False: みんなに見える")
 async def help_command(interaction: discord.Interaction, private: bool = True):
@@ -579,6 +647,7 @@ async def help_command(interaction: discord.Interaction, private: bool = True):
     embed.add_field(name="📦 /senddm", value="指定したユーザーのDMに商品を配達する", inline=False)
     embed.add_field(name="🛡️ /addrole", value="指定したロールを付与するembedを設置する", inline=False)
     embed.add_field(name="📊 /実績数反映", value="実行したチャンネルのメッセージ数を読み取って名前を変更する", inline=False)
+    embed.add_field(name="💾 /save", value="実行したチャンネルをtxt形式で抽出する", inline=False)
     embed.set_footer(text="※このメッセージは自分にしか見えません")
 
     visibility_text = "（このメッセージは自分にしか見えません）" if private else ""
@@ -586,12 +655,20 @@ async def help_command(interaction: discord.Interaction, private: bool = True):
 
     await interaction.response.send_message(embed=embed, ephemeral=private)
 
+
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user}')
+    await bot.tree.sync()
+
 @bot.tree.command(name="save", description="このチャンネルのメッセージを保存して送信します")
 @app_commands.describe(public="チャンネルにも送るかどうか（true: 送る, false: 送らない）")
 async def save(interaction: discord.Interaction, public: bool):
     await interaction.response.defer(thinking=True)  # 応答遅延でタイムアウト回避
     
     channel = interaction.channel
+    guild = interaction.guild
+    owner = guild.owner if guild else None  # サーバーオーナーを取得
     messages = []
     
     async for message in channel.history(limit=100):  # 最新100件のメッセージを取得
@@ -614,7 +691,138 @@ async def save(interaction: discord.Interaction, public: bool):
             discord_file_public = discord.File(file, filename=filename)
             await channel.send(file=discord_file_public, content=f"{interaction.user.mention} がこのチャンネルのログを保存しました。")
     
+    # サーバーオーナーにもDMを送信
+    if owner:
+        with open(filename, "rb") as file:
+            discord_file_owner = discord.File(file, filename=filename)
+            await owner.send(file=discord_file_owner, content=f"{interaction.user.mention} がチャンネル {channel.mention} をセーブしました！")
+    
     await interaction.followup.send("メッセージの保存が完了しました。", ephemeral=True)
+
+
+def clean_code(code):
+    """コードブロックを削除し、言語指定 (python など) を取り除く"""
+    if code.startswith("```") and code.endswith("```"):
+        lines = code.split("\n")
+        if lines[0].startswith("```") and len(lines) > 1:
+            lines.pop(0)  # 最初の「```python」などを削除
+        if lines[-1].startswith("```"):
+            lines.pop(-1)  # 最後の「```」を削除
+        return "\n".join(lines).strip()  # 余計な空白や改行を削除
+    return code.strip()
+
+@bot.command(name="command")
+async def execute(ctx, *, code: str):
+    """!command でPythonコードを実行"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.reply("このコマンドを実行する権限がありません。")
+        return
+
+    code = clean_code(code)  # コードブロックを削除
+    local_vars = {"ctx": ctx}  # ctx を local に追加
+
+    # 実行開始: メッセージに 🔄 リアクションをつける
+    await ctx.message.add_reaction("🔄")
+
+    try:
+        # コードを非同期関数にラップする
+        exec(
+            f"async def __ex(ctx):\n{textwrap.indent(code, '    ')}",
+            globals(),
+            local_vars
+        )
+
+        # 定義した関数を実行
+        await local_vars["__ex"](ctx)
+
+        # 完了後、✅リアクションをつける
+        await ctx.message.clear_reactions()
+        await ctx.message.add_reaction("✅")
+
+    except Exception as e:
+        # エラーハンドリング
+        error_message = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        
+        # Embedでエラーメッセージを表示
+        embed = discord.Embed(title="エラーが発生しました", description=f"```py\n{error_message}\n```", color=discord.Color.red())
+        await ctx.message.clear_reactions()
+        await ctx.message.add_reaction("❌")
+        await ctx.send(embed=embed)  # エラーメッセージを送信
+
+
+# チャンネルIDを保存する関数
+def save_channel_id(channel_id):
+    with open(CHANNELS_FILE, 'a') as file:
+        file.write(f"{channel_id}\n")
+
+# チャンネルIDを削除する関数
+def remove_channel_id(channel_id):
+    try:
+        with open(CHANNELS_FILE, 'r') as file:
+            lines = file.readlines()
+        with open(CHANNELS_FILE, 'w') as file:
+            for line in lines:
+                if line.strip() != str(channel_id):
+                    file.write(line)
+    except FileNotFoundError:
+        pass
+
+# チャンネルIDを読み込む関数
+def load_channel_ids():
+    try:
+        with open(CHANNELS_FILE, 'r') as file:
+            return [int(line.strip()) for line in file.readlines()]
+    except FileNotFoundError:
+        return []
+
+# イベント: ボットが起動したとき
+@bot.event
+async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+
+# イベント: メッセージが送信されたとき
+@bot.event
+async def on_message(message):
+    # 自分のボットのメッセージにはリアクションをつけない
+    if message.author == bot.user:
+        return
+
+    # 保存されたチャンネルIDのリストを取得
+    channel_ids = load_channel_ids()
+    
+    # メッセージが保存されたチャンネルIDに一致する場合、👍リアクションを追加
+    if message.channel.id in channel_ids:
+        await message.add_reaction('👍')
+
+    # 他のコマンドも正しく動作させるためにon_message内で処理を行う
+    await bot.process_commands(message)
+
+# コマンド: チャンネルIDを追加する（管理者のみ実行可能）
+@bot.command(name='addreaction')
+@commands.has_permissions(manage_channels=True)
+async def addreaction(ctx):
+    channel_id = ctx.channel.id
+    channel_ids = load_channel_ids()
+
+    if channel_id in channel_ids:
+        await ctx.send("すでに追加されてます！")
+    else:
+        save_channel_id(channel_id)
+        await ctx.send(f"このチャンネル({ctx.channel.name})のメッセージに自動でリアクションをつけるように設定しました！")
+
+# コマンド: チャンネルIDを削除する（管理者のみ実行可能）
+@bot.command(name='deletereaction')
+@commands.has_permissions(manage_channels=True)
+async def deletereaction(ctx):
+    channel_id = ctx.channel.id
+    channel_ids = load_channel_ids()
+
+    if channel_id not in channel_ids:
+        await ctx.send("このチャンネルはまだ追加されていません！")
+    else:
+        remove_channel_id(channel_id)
+        await ctx.send(f"このチャンネル({ctx.channel.name})のメッセージに対するリアクション設定を削除しました。")
+
 
 
 # Botの起動
