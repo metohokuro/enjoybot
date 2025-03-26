@@ -272,7 +272,7 @@ async def say(interaction: discord.Interaction, user: discord.Member, message: s
                 f"👤 実行者: {executor.mention}\n"
                 f"📝 名前: {executor.display_name}\n"
                 f"🔗 ユーザー名: {executor.name}\n"
-                f"🆔 ID: {executor.id}"
+                f"🆔 ID: {executor.id}\n"
                 f"📝 内容: {message}"
             )
             await log_channel.send(f"🛠 `/say` コマンドが実行されました！\n\n{executor_info}")
